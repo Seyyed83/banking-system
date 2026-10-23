@@ -20,6 +20,13 @@ public interface AccountRepository
 
     Optional<Account> findByAccountNumber(String accountNumber);
 
+    /**
+     * Scalar lookup: returns only the ID, so no Account entity is loaded into the
+     * persistence context before the row lock is taken.
+     */
+    @Query("select a.id from Account a where a.accountNumber = :accountNumber")
+    Optional<Long> findIdByAccountNumber(@Param("accountNumber") String accountNumber);
+
     List<Account> findByCustomerId(Long customerId);
 
     Page<Account> findByCustomerId(

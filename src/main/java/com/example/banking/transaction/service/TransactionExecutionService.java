@@ -90,25 +90,20 @@ public class TransactionExecutionService {
     }
 
     private void executeTransfer(TransactionRequest request) {
-        Account sourceSnapshot = accountRepository.findById(request.getSourceAccountId())
-                .orElseThrow(() -> new FinancialOperationException("ACCOUNT_NOT_FOUND", "Source account was not found."));
-        Account destinationSnapshot = accountRepository.findById(request.getDestinationAccountId())
-                .orElseThrow(() -> new FinancialOperationException("ACCOUNT_NOT_FOUND", "Destination account was not found."));
-        Account systemSnapshot = accountRepository.findByAccountNumber(systemAccountNumber)
+        // Resolve the bank account ID with a scalar query so that NO Account entity is loaded
+        // before the row locks are taken. Reading entities first (e.g. findById) would leave
+        // stale balances in the persistence context, and a later "SELECT ... FOR UPDATE" does
+        // not refresh already-managed entities -> lost update / overdraft under concurrency.
+        Long systemAccountId = accountRepository.findIdByAccountNumber(systemAccountNumber)
                 .orElseThrow(() -> new FinancialOperationException(
                         "BANK_ACCOUNT_NOT_CONFIGURED", "The bank fee account is not configured."));
 
-        if (systemSnapshot.getAccountRole() != AccountRole.SYSTEM) {
-            throw new FinancialOperationException(
-                    "BANK_ACCOUNT_NOT_CONFIGURED", "Configured bank fee account is not a system account.");
-        }
-
         // Every account touched by a transfer is locked in ascending ID order to reduce deadlocks.
         Map<Long, Account> locked = lockAccounts(List.of(
-                sourceSnapshot.getId(), destinationSnapshot.getId(), systemSnapshot.getId()));
+                request.getSourceAccountId(), request.getDestinationAccountId(), systemAccountId));
         Account source = locked.get(request.getSourceAccountId());
         Account destination = locked.get(request.getDestinationAccountId());
-        Account system = locked.get(systemSnapshot.getId());
+        Account system = locked.get(systemAccountId);
         requireCustomerAccount(source);
         requireCustomerAccount(destination);
         if (system.getAccountRole() != AccountRole.SYSTEM) {

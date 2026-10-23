@@ -228,6 +228,42 @@ class OracleFinancialIntegrationTest {
                 .mapToInt(r -> financialTransactions(r).size()).sum());
     }
 
+    @Test
+    void concurrentTransfersCannotOverdrawSourceAccount() throws Exception {
+        // Default fee config: 0.1% with a 500 minimum -> each 60,000 transfer costs 60,500 in total,
+        // so a 100,000 balance can fund exactly ONE of the two concurrent transfers.
+        Account source = newCustomerAccount(new BigDecimal("100000.0000"));
+        Account destination = newCustomerAccount(BigDecimal.ZERO);
+        BigDecimal bankBefore = accountRepository.findByAccountNumber(systemAccountNumber)
+                .orElseThrow().getBalance();
+
+        TransactionRequest first = submit("TRANSFER", TransactionType.TRANSFER,
+                source.getAccountNumber(), destination.getAccountNumber(), "60000.0000");
+        TransactionRequest second = submit("TRANSFER", TransactionType.TRANSFER,
+                source.getAccountNumber(), destination.getAccountNumber(), "60000.0000");
+
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            var f1 = executor.submit(() -> { start.await(); processor.processRequest(first.getId()); return null; });
+            var f2 = executor.submit(() -> { start.await(); processor.processRequest(second.getId()); return null; });
+            start.countDown();
+            f1.get(30, TimeUnit.SECONDS);
+            f2.get(30, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+        }
+
+        List<TransactionRequest> results = List.of(getRequest(first.getId()), getRequest(second.getId()));
+        assertEquals(1, results.stream().filter(r -> r.getStatus() == TransactionRequestStatus.COMPLETED).count());
+        assertEquals(1, results.stream().filter(r -> r.getStatus() == TransactionRequestStatus.FAILED).count());
+        assertMoney("39500.0000", accountRepository.findById(source.getId()).orElseThrow().getBalance());
+        assertMoney("60000.0000", accountRepository.findById(destination.getId()).orElseThrow().getBalance());
+        assertMoney(bankBefore.add(new BigDecimal("500.0000")).toPlainString(),
+                accountRepository.findByAccountNumber(systemAccountNumber).orElseThrow().getBalance());
+    }
+
     private TransactionRequest submit(String suffix, TransactionType type,
                                      String source, String destination, String amount) {
         return submissionService.submit(new CreateTransactionRequest(

@@ -7,6 +7,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -107,6 +108,15 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleUnexpected(
             Exception ex,
             HttpServletRequest request) {
+
+        // Spring MVC's own client errors (unknown URL -> 404, wrong method -> 405,
+        // unsupported media type -> 415, ...) implement ErrorResponse; keep their status.
+        if (ex instanceof ErrorResponse errorResponse) {
+            HttpStatus status = HttpStatus.resolve(errorResponse.getStatusCode().value());
+            if (status != null && status.is4xxClientError()) {
+                return error(status, status.getReasonPhrase(), request);
+            }
+        }
 
         log.error("Unexpected API error on {}",
                 request.getRequestURI(), ex);

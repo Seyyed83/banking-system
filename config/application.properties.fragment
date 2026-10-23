@@ -1,6 +1,0 @@
-# Append these settings to src/main/resources/application.properties.
-# Every setting can be overridden with an environment variable.
-banking.system-account-number=${BANKING_SYSTEM_ACCOUNT_NUMBER:99999999999999}
-banking.transfer-fee.rate=${BANKING_TRANSFER_FEE_RATE:0.001}
-banking.transfer-fee.minimum=${BANKING_TRANSFER_FEE_MINIMUM:500}
-banking.transfer-fee.maximum=${BANKING_TRANSFER_FEE_MAXIMUM:10000}
