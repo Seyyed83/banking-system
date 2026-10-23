@@ -22,6 +22,7 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
@@ -37,6 +38,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Real Oracle integration tests. Opt in with -Doracle.integration=true. */
 @SpringBootTest
 @EnabledIfSystemProperty(named = "oracle.integration", matches = "true")
+@TestPropertySource(properties = {"banking.security.username=test-admin", "banking.security.password=test-password"})
 class OracleFinancialIntegrationTest {
 
     @Autowired private JdbcTemplate jdbcTemplate;
