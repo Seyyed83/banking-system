@@ -36,10 +36,12 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** Real Oracle integration tests. Opt in with -Doracle.integration=true. */
-@SpringBootTest
+@SpringBootTest(properties = {"banking.worker.poll-interval-ms=3600000"})
 @EnabledIfSystemProperty(named = "oracle.integration", matches = "true")
 @TestPropertySource(properties = {"banking.security.username=test-admin", "banking.security.password=test-password"})
 class OracleFinancialIntegrationTest {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.example.banking.transaction.service.TransactionWorker workerForIntegrationTest;
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private AccountRepository accountRepository;
@@ -313,5 +315,72 @@ class OracleFinancialIntegrationTest {
     private static void assertMoney(String expected, BigDecimal actual) {
         assertEquals(0, actual.compareTo(new BigDecimal(expected)),
                 "Expected balance " + expected + " but was " + actual);
+    }
+
+    @Test
+    void workerProcessesSubmittedDepositEndToEnd() {
+        // Create a real customer account in Oracle.
+        Account destination = newCustomerAccount(BigDecimal.ZERO);
+        BigDecimal amount = new BigDecimal("123.4500");
+
+        BigDecimal balanceBefore = accountRepository
+                .findById(destination.getId())
+                .orElseThrow()
+                .getBalance();
+
+        // Submit through the existing transaction submission service.
+        TransactionRequest submitted = submit(
+                "worker-e2e",
+                TransactionType.DEPOSIT,
+                null,
+                destination.getAccountNumber(),
+                amount.toPlainString());
+
+        assertEquals(
+                TransactionRequestStatus.PENDING,
+                submitted.getStatus());
+
+        // Exercise the actual Worker -> claim -> Processor -> Execution path.
+        workerForIntegrationTest.poll();
+
+        TransactionRequest completed = getRequest(submitted.getId());
+
+        assertEquals(
+                TransactionRequestStatus.COMPLETED,
+                completed.getStatus(),
+                "The worker should complete the submitted deposit.");
+
+        assertEquals(1, completed.getAttemptCount());
+        org.junit.jupiter.api.Assertions.assertNotNull(
+                completed.getProcessedAt());
+
+        // Verify the balance was actually changed in Oracle.
+        Account refreshedAccount = accountRepository
+                .findById(destination.getId())
+                .orElseThrow();
+
+        assertMoney(
+                balanceBefore.add(amount).toPlainString(),
+                refreshedAccount.getBalance());
+
+        // Verify the financial transaction and ledger records exist.
+        List<FinancialTransaction> transactions =
+                financialTransactions(completed);
+
+        assertEquals(
+                1,
+                transactions.size(),
+                "A deposit should create one financial transaction.");
+
+        List<LedgerEntry> entries = ledgerEntries(transactions);
+
+        assertEquals(
+                1,
+                entries.size(),
+                "A deposit should create one ledger entry.");
+
+        assertMoney(
+                amount.toPlainString(),
+                entries.get(0).getAmount());
     }
 }
