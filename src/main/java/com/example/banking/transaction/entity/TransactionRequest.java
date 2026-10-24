@@ -125,6 +125,18 @@ public class TransactionRequest {
         failureCode = code;
     }
 
+    public void scheduleRetry(
+            OffsetDateTime nextAttemptAt,
+            String failureCode) {
+
+        this.status = TransactionRequestStatus.PENDING;
+        this.nextAttemptAt = nextAttemptAt;
+        this.workerId = null;
+        this.leaseUntil = null;
+        this.processedAt = null;
+        this.failureCode = failureCode;
+    }
+
     public Long getId() { return id; }
     public String getRequestCode() { return requestCode; }
     public String getClientId() { return clientId; }

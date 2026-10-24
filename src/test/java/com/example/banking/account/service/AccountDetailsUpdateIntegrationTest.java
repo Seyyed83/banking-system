@@ -54,8 +54,11 @@ class AccountDetailsUpdateIntegrationTest {
     void updatesProfileAndAuditsOnlyChangedFields() {
         Account account = createAccount("Before Name", "ADDR-OLD");
         String accountNumber = account.getAccountNumber();
-        var createdAt = account.getCreatedAt();
-        var oldUpdatedAt = account.getUpdatedAt();
+        var createdAt = jdbcTemplate.queryForObject(
+                "SELECT CREATED_AT FROM ACCOUNTS WHERE ID = ?",
+                (rs, rowNum) -> rs.getTimestamp("CREATED_AT").toInstant(),
+                account.getId()
+        );        var oldUpdatedAt = account.getUpdatedAt();
 
         AccountDetailsResponse response = updateService.update(account.getId(), request(
                 "INDIVIDUAL", "NATIONAL_ID", newIdentity(), "After Name",
@@ -65,7 +68,7 @@ class AccountDetailsUpdateIntegrationTest {
         assertEquals("ADDR-NEW", response.address());
         assertEquals(accountNumber, response.accountNumber(), "Account number must be immutable.");
         assertEquals(
-                createdAt.toInstant().truncatedTo(ChronoUnit.MICROS),
+                createdAt,
                 response.accountCreatedAt().toInstant(),
                 "Account creation timestamp must be immutable."
         );

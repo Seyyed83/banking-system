@@ -49,14 +49,18 @@ public class TransactionExecutionService {
     }
 
     @Transactional
-    public void execute(Long requestId) {
-        TransactionRequest request = requestRepository.findByIdForUpdate(requestId)
-                .orElseThrow(() -> new IllegalArgumentException("Transaction request not found."));
+    public void execute(Long requestId, String workerId) {
+        TransactionRequest request = requestRepository
+                .findByIdForUpdate(requestId)
+                .orElseThrow(() ->
+                        new IllegalArgumentException(
+                                "Transaction request not found."));
 
-        if (request.getStatus() != TransactionRequestStatus.PENDING) {
+        if (request.getStatus() != TransactionRequestStatus.PROCESSING
+                || !java.util.Objects.equals(
+                request.getWorkerId(), workerId)) {
             return;
         }
-        request.markProcessing("synchronous-api");
 
         switch (request.getTransactionType()) {
             case DEPOSIT -> executeDeposit(request);

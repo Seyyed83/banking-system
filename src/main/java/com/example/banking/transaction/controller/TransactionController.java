@@ -6,7 +6,6 @@ import com.example.banking.transaction.dto.TransactionResponse;
 import com.example.banking.transaction.entity.FinancialTransactionType;
 import com.example.banking.transaction.service.SubmissionResult;
 import com.example.banking.transaction.service.TransactionHistoryService;
-import com.example.banking.transaction.service.TransactionProcessor;
 import com.example.banking.transaction.service.TransactionQueryService;
 import com.example.banking.transaction.service.TransactionSubmissionService;
 import org.springframework.data.domain.Page;
@@ -23,17 +22,14 @@ import java.time.OffsetDateTime;
 public class TransactionController {
 
     private final TransactionSubmissionService submissionService;
-    private final TransactionProcessor processor;
     private final TransactionQueryService queryService;
     private final TransactionHistoryService historyService;
 
     public TransactionController(
             TransactionSubmissionService submissionService,
-            TransactionProcessor processor,
             TransactionQueryService queryService,
             TransactionHistoryService historyService) {
         this.submissionService = submissionService;
-        this.processor = processor;
         this.queryService = queryService;
         this.historyService = historyService;
     }
@@ -42,7 +38,6 @@ public class TransactionController {
     public ResponseEntity<TransactionResponse> submit(
             @RequestBody CreateTransactionRequest request) {
         SubmissionResult result = submissionService.submit(request);
-        processor.processRequest(result.request().getId());
         TransactionResponse response =
                 queryService.getByRequestCode(result.request().getRequestCode());
         return ResponseEntity
