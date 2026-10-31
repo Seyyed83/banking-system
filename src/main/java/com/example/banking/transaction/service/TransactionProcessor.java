@@ -1,4 +1,3 @@
-
 package com.example.banking.transaction.service;
 
 import org.slf4j.Logger;
@@ -44,6 +43,8 @@ public class TransactionProcessor {
             executionService.execute(requestId, workerId);
 
         } catch (FinancialOperationException exception) {
+            log.warn("Business validation failed for transaction request id={}, worker={}, failureCode={}, reason={}",
+                    requestId, workerId, exception.getFailureCode(), exception.getMessage());
             requestService.markFailed(
                     requestId,
                     workerId,

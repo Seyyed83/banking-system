@@ -9,13 +9,17 @@ import com.example.banking.transaction.repository.TransactionRequestRepository;
 
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.sql.Date;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -25,6 +29,11 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest(properties = {
         "banking.worker.poll-interval-ms=3600000"
+})
+@EnabledIfSystemProperty(named = "oracle.integration", matches = "true")
+@TestPropertySource(properties = {
+        "banking.security.username=test-admin",
+        "banking.security.password=test-password"
 })
 @Transactional
 class TransactionRequestRepositoryIntegrationTest {
@@ -130,13 +139,18 @@ class TransactionRequestRepositoryIntegrationTest {
         jdbcTemplate.update(
                 """
                 INSERT INTO CUSTOMERS
-                    (CUSTOMER_TYPE, IDENTITY_TYPE, IDENTITY_NUMBER, FULL_NAME)
-                VALUES (?, ?, ?, ?)
+                    (CUSTOMER_TYPE, IDENTITY_TYPE, IDENTITY_NUMBER, FULL_NAME,
+                     BIRTH_OR_REG_DATE, MOBILE, ADDRESS, POSTAL_CODE)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 "INDIVIDUAL",
                 "NATIONAL_ID",
                 identity,
-                "Transaction Request Integration Test");
+                "Transaction Request Integration Test",
+                Date.valueOf(LocalDate.of(1990, 1, 1)),
+                "09120000000",
+                "Tehran Integration Test Address",
+                "1234567890");
 
         Long customerId = jdbcTemplate.queryForObject(
                 """

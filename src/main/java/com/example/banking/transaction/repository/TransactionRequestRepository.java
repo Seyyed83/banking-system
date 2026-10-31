@@ -10,6 +10,8 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 
 public interface TransactionRequestRepository
@@ -97,18 +99,15 @@ public interface TransactionRequestRepository
             @Param("leaseSeconds") int leaseSeconds,
             @Param("maxAttempts") int maxAttempts);
 
-    @Modifying(flushAutomatically = true, clearAutomatically = true)
-    @Query(value = """
-            UPDATE TRANSACTION_REQUESTS
-               SET STATUS = 'FAILED',
-                   PROCESSED_AT = SYSTIMESTAMP,
-                   WORKER_ID = NULL,
-                   LEASE_UNTIL = NULL,
-                   FAILURE_CODE = 'MAX_ATTEMPTS_EXCEEDED'
-             WHERE STATUS = 'PROCESSING'
-               AND LEASE_UNTIL <= SYSTIMESTAMP
-               AND ATTEMPT_COUNT >= :maxAttempts
-            """, nativeQuery = true)
-    int failExpiredExhaustedRequests(
-            @Param("maxAttempts") int maxAttempts);
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select r from TransactionRequest r
+             where r.status = :status
+               and r.leaseUntil <= :now
+               and r.attemptCount >= :maxAttempts
+            """)
+    List<TransactionRequest> findExpiredExhaustedForUpdate(
+            @Param("status") TransactionRequestStatus status,
+            @Param("maxAttempts") int maxAttempts,
+            @Param("now") OffsetDateTime now);
 }

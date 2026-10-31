@@ -4,12 +4,16 @@ import com.example.banking.account.dto.AccountDetailsResponse;
 import com.example.banking.account.dto.AccountDetailsResponse.CustomerDetails;
 import com.example.banking.account.dto.UpdateAccountDetailsRequest;
 import com.example.banking.account.entity.Account;
-import com.example.banking.account.entity.AccountRole;
 import com.example.banking.account.entity.AccountAudit;
+import com.example.banking.account.entity.AccountRole;
 import com.example.banking.account.repository.AccountAuditRepository;
 import com.example.banking.account.repository.AccountRepository;
 import com.example.banking.common.exception.ConflictException;
 import com.example.banking.common.exception.ResourceNotFoundException;
+import com.example.banking.common.logging.LogMasker;
+import com.example.banking.customer.service.CustomerRules;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -25,6 +29,9 @@ import java.util.Objects;
 
 @Service
 public class AccountDetailsUpdateService {
+
+    private static final Logger log =
+            LoggerFactory.getLogger(AccountDetailsUpdateService.class);
 
     private static final String CUSTOMER_SELECT = """
             SELECT ID, CUSTOMER_TYPE, IDENTITY_TYPE, IDENTITY_NUMBER,
@@ -52,13 +59,18 @@ public class AccountDetailsUpdateService {
      * Customer changes, account last-updated timestamp and audit rows share one DB transaction.
      */
     @Transactional
-    public AccountDetailsResponse update(Long accountId, UpdateAccountDetailsRequest request) {
+    public AccountDetailsResponse update(
+            Long accountId,
+            UpdateAccountDetailsRequest request,
+            String changedBy) {
         if (accountId == null || accountId <= 0) {
             throw new IllegalArgumentException("Invalid account ID.");
         }
         if (request == null) {
             throw new IllegalArgumentException("Request body is required.");
         }
+
+        String actor = required(changedBy, "The actor making the change", 100);
 
         Account account = accountRepository.findByIdForUpdate(accountId)
                 .orElseThrow(() -> new ResourceNotFoundException("Account not found."));
@@ -67,7 +79,7 @@ public class AccountDetailsUpdateService {
             throw new IllegalArgumentException("Customer details cannot be changed for a system account.");
         }
 
-        NormalizedRequest normalized = normalizeAndValidate(request);
+        NormalizedRequest normalized = normalizeAndValidate(request, actor);
         CustomerDetails old = loadCustomer(account.getCustomerId());
 
         long duplicates = jdbcTemplate.queryForObject("""
@@ -77,6 +89,8 @@ public class AccountDetailsUpdateService {
                 """, Long.class,
                 normalized.identityType(), normalized.identityNumber(), old.id());
         if (duplicates > 0) {
+            log.warn("Rejected duplicate identity update for accountId={}, identityType={}, identity={}",
+                    accountId, normalized.identityType(), LogMasker.maskIdentity(normalized.identityNumber()));
             throw new ConflictException("A customer with this identity type and number already exists.");
         }
 
@@ -119,6 +133,12 @@ public class AccountDetailsUpdateService {
             // their modification must refresh the account's last-updated timestamp too.
             jdbcTemplate.update("UPDATE ACCOUNTS SET UPDATED_AT = SYSTIMESTAMP WHERE ID = ?", accountId);
             auditRepository.saveAll(audits);
+
+            log.info("Updated customer details for accountId={}, accountNumber={}, changedFieldsCount={}, changedBy={}",
+                    accountId,
+                    LogMasker.maskAccountNumber(account.getAccountNumber()),
+                    audits.size(),
+                    actor);
         }
 
         CustomerDetails updated = loadCustomer(account.getCustomerId());
@@ -170,7 +190,9 @@ public class AccountDetailsUpdateService {
         return date == null ? null : date.toString();
     }
 
-    private static NormalizedRequest normalizeAndValidate(UpdateAccountDetailsRequest request) {
+    private static NormalizedRequest normalizeAndValidate(
+            UpdateAccountDetailsRequest request,
+            String actor) {
         String customerType = required(request.customerType(), "Customer type", 20)
                 .toUpperCase(Locale.ROOT);
         if (!List.of("INDIVIDUAL", "CORPORATE", "FOREIGN").contains(customerType)) {
@@ -191,10 +213,18 @@ public class AccountDetailsUpdateService {
         String mobile = required(request.mobile(), "Mobile", 20);
         String address = required(request.address(), "Address", 500);
         String postalCode = required(request.postalCode(), "Postal code", 20);
-        String changedBy = required(request.changedBy(), "The actor making the change", 100);
+
+        CustomerRules.validate(
+                customerType,
+                identityType,
+                identityNumber,
+                birthOrRegDate,
+                mobile,
+                postalCode
+        );
 
         return new NormalizedRequest(customerType, identityType, identityNumber,
-                fullName, birthOrRegDate, mobile, address, postalCode, changedBy);
+                fullName, birthOrRegDate, mobile, address, postalCode, actor);
     }
 
     private static String required(String value, String fieldName, int maxLength) {

@@ -1,12 +1,17 @@
 package com.example.banking.transaction.service;
 
+import com.example.banking.account.cache.AccountBalanceCache;
 import com.example.banking.account.entity.Account;
 import com.example.banking.account.entity.AccountRole;
 import com.example.banking.account.repository.AccountRepository;
+import com.example.banking.common.logging.LogMasker;
+import com.example.banking.outbox.OutboxEventService;
 import com.example.banking.transaction.entity.*;
 import com.example.banking.transaction.repository.FinancialTransactionRepository;
 import com.example.banking.transaction.repository.LedgerEntryRepository;
 import com.example.banking.transaction.repository.TransactionRequestRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,10 +26,15 @@ import java.util.UUID;
 @Service
 public class TransactionExecutionService {
 
+    private static final Logger log =
+            LoggerFactory.getLogger(TransactionExecutionService.class);
+
     private final TransactionRequestRepository requestRepository;
     private final AccountRepository accountRepository;
     private final FinancialTransactionRepository financialTransactionRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
+    private final AccountBalanceCache balanceCache;
+    private final OutboxEventService outboxEventService;
 
     @Value("${banking.system-account-number:99999999999999}")
     private String systemAccountNumber;
@@ -41,11 +51,15 @@ public class TransactionExecutionService {
     public TransactionExecutionService(TransactionRequestRepository requestRepository,
                                        AccountRepository accountRepository,
                                        FinancialTransactionRepository financialTransactionRepository,
-                                       LedgerEntryRepository ledgerEntryRepository) {
+                                       LedgerEntryRepository ledgerEntryRepository,
+                                       AccountBalanceCache balanceCache,
+                                       OutboxEventService outboxEventService) {
         this.requestRepository = requestRepository;
         this.accountRepository = accountRepository;
         this.financialTransactionRepository = financialTransactionRepository;
         this.ledgerEntryRepository = ledgerEntryRepository;
+        this.balanceCache = balanceCache;
+        this.outboxEventService = outboxEventService;
     }
 
     @Transactional
@@ -69,6 +83,15 @@ public class TransactionExecutionService {
         }
 
         request.markCompleted();
+        // Same Oracle transaction as the money movement: the event exists iff the commit succeeds.
+        outboxEventService.recordCompleted(
+                request,
+                financialTransactionRepository.findByRequestIdOrderByCreatedAtAsc(request.getId()));
+        log.info("Completed transaction request requestCode={}, id={}, type={}, amount={}",
+                request.getRequestCode(),
+                request.getId(),
+                request.getTransactionType(),
+                request.getAmount());
     }
 
     private void executeDeposit(TransactionRequest request) {
@@ -80,6 +103,12 @@ public class TransactionExecutionService {
         FinancialTransaction transaction = saveFinancialTransaction(
                 request, null, FinancialTransactionType.DEPOSIT, request.getAmount());
         saveLedger(transaction, account, LedgerEntryType.CREDIT, request.getAmount());
+
+        log.info("Executed DEPOSIT trackingCode={} for requestCode={}, destinationAccount={}, amount={}",
+                transaction.getTrackingCode(),
+                request.getRequestCode(),
+                LogMasker.maskAccountNumber(account.getAccountNumber()),
+                request.getAmount());
     }
 
     private void executeWithdrawal(TransactionRequest request) {
@@ -91,6 +120,12 @@ public class TransactionExecutionService {
         FinancialTransaction transaction = saveFinancialTransaction(
                 request, null, FinancialTransactionType.WITHDRAWAL, request.getAmount());
         saveLedger(transaction, account, LedgerEntryType.DEBIT, request.getAmount());
+
+        log.info("Executed WITHDRAWAL trackingCode={} for requestCode={}, sourceAccount={}, amount={}",
+                transaction.getTrackingCode(),
+                request.getRequestCode(),
+                LogMasker.maskAccountNumber(account.getAccountNumber()),
+                request.getAmount());
     }
 
     private void executeTransfer(TransactionRequest request) {
@@ -129,6 +164,15 @@ public class TransactionExecutionService {
                 request, transfer.getId(), FinancialTransactionType.FEE, fee);
         saveLedger(feeTransaction, source, LedgerEntryType.DEBIT, fee);
         saveLedger(feeTransaction, system, LedgerEntryType.CREDIT, fee);
+
+        log.info("Executed TRANSFER trackingCode={} and FEE trackingCode={} for requestCode={}, source={}, destination={}, amount={}, fee={}",
+                transfer.getTrackingCode(),
+                feeTransaction.getTrackingCode(),
+                request.getRequestCode(),
+                LogMasker.maskAccountNumber(source.getAccountNumber()),
+                LogMasker.maskAccountNumber(destination.getAccountNumber()),
+                request.getAmount(),
+                fee);
     }
 
     private Map<Long, Account> lockAccounts(List<Long> ids) {
@@ -138,6 +182,8 @@ public class TransactionExecutionService {
                     .orElseThrow(() -> new FinancialOperationException("ACCOUNT_NOT_FOUND", "Account was not found."));
             accounts.put(id, account);
         });
+        // Every locked account is about to change: evict its cached balance after the commit.
+        balanceCache.evictAfterCommit(accounts.values().stream().map(Account::getAccountNumber).toList());
         return accounts;
     }
 

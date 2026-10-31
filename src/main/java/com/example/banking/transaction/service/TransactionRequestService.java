@@ -1,5 +1,6 @@
 package com.example.banking.transaction.service;
 
+import com.example.banking.outbox.OutboxEventService;
 import com.example.banking.transaction.entity.TransactionRequest;
 import com.example.banking.transaction.entity.TransactionRequestStatus;
 import com.example.banking.transaction.repository.TransactionRequestRepository;
@@ -9,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -16,6 +18,7 @@ import java.util.Optional;
 public class TransactionRequestService {
 
     private final TransactionRequestRepository repository;
+    private final OutboxEventService outboxEventService;
 
     @Value("${banking.worker.max-attempts:5}")
     private int maxAttempts;
@@ -24,8 +27,10 @@ public class TransactionRequestService {
     private int leaseSeconds;
 
     public TransactionRequestService(
-            TransactionRequestRepository repository) {
+            TransactionRequestRepository repository,
+            OutboxEventService outboxEventService) {
         this.repository = repository;
+        this.outboxEventService = outboxEventService;
     }
 
     @Transactional
@@ -60,6 +65,7 @@ public class TransactionRequestService {
         }
 
         request.markFailed(normalizeFailureCode(failureCode));
+        outboxEventService.recordFailed(request);
     }
 
     @Transactional
@@ -77,6 +83,7 @@ public class TransactionRequestService {
 
         if (request.getAttemptCount() >= maxAttempts) {
             request.markFailed("MAX_ATTEMPTS_EXCEEDED");
+            outboxEventService.recordFailed(request);
             return;
         }
 
@@ -96,7 +103,17 @@ public class TransactionRequestService {
 
     @Transactional
     public void failExpiredExhaustedRequests() {
-        repository.failExpiredExhaustedRequests(maxAttempts);
+        // Rows are locked and failed through the entity (instead of one bulk UPDATE) so that each
+        // failure also gets its outbox event inside this same transaction.
+        List<TransactionRequest> expired = repository.findExpiredExhaustedForUpdate(
+                TransactionRequestStatus.PROCESSING,
+                maxAttempts,
+                OffsetDateTime.now(ZoneOffset.UTC));
+
+        for (TransactionRequest request : expired) {
+            request.markFailed("MAX_ATTEMPTS_EXCEEDED");
+            outboxEventService.recordFailed(request);
+        }
     }
 
     private TransactionRequest findOwnedRequest(

@@ -1,11 +1,20 @@
 package com.example.banking.account.service;
 
+import com.example.banking.account.dto.AccountDetailsResponse;
+import com.example.banking.account.cache.AccountBalanceCache;
 import com.example.banking.account.entity.Account;
 import com.example.banking.account.entity.AccountAudit;
+import com.example.banking.account.entity.AccountRole;
 import com.example.banking.account.entity.AccountStatus;
 import com.example.banking.account.repository.AccountAuditRepository;
 import com.example.banking.account.repository.AccountRepository;
 import com.example.banking.common.exception.ResourceNotFoundException;
+import com.example.banking.common.logging.LogMasker;
+import com.example.banking.customer.entity.Customer;
+import com.example.banking.customer.repository.CustomerRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -13,17 +22,42 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Locale;
+
 @Service
 public class AccountManagementService {
 
+    private static final Logger log =
+            LoggerFactory.getLogger(AccountManagementService.class);
+
     private final AccountRepository accountRepository;
     private final AccountAuditRepository auditRepository;
+    private final CustomerRepository customerRepository;
+    private final AccountBalanceCache balanceCache;
 
     public AccountManagementService(
             AccountRepository accountRepository,
             AccountAuditRepository auditRepository) {
+        this(accountRepository, auditRepository, null);
+    }
+
+    public AccountManagementService(
+            AccountRepository accountRepository,
+            AccountAuditRepository auditRepository,
+            CustomerRepository customerRepository) {
+        this(accountRepository, auditRepository, customerRepository, null);
+    }
+
+    @Autowired
+    public AccountManagementService(
+            AccountRepository accountRepository,
+            AccountAuditRepository auditRepository,
+            CustomerRepository customerRepository,
+            AccountBalanceCache balanceCache) {
         this.accountRepository = accountRepository;
         this.auditRepository = auditRepository;
+        this.customerRepository = customerRepository;
+        this.balanceCache = balanceCache;
     }
 
     @Transactional(readOnly = true)
@@ -48,6 +82,77 @@ public class AccountManagementService {
         return accountRepository.findByAccountNumber(accountNumber)
                 .orElseThrow(() ->
                         new ResourceNotFoundException("Account not found."));
+    }
+
+    /**
+     * Retrieves full customer registration details, account status, balance and timestamps
+     * by account ID (Task section 2-3).
+     */
+    @Transactional(readOnly = true)
+    public AccountDetailsResponse getDetailsById(Long id) {
+        Account account = getById(id);
+        return toAccountDetailsResponse(account);
+    }
+
+    /**
+     * Retrieves full customer registration details, account status, balance and timestamps
+     * by 14-digit account number (Task section 2-3).
+     */
+    @Transactional(readOnly = true)
+    public AccountDetailsResponse getDetailsByAccountNumber(String accountNumber) {
+        Account account = getByAccountNumber(accountNumber);
+        return toAccountDetailsResponse(account);
+    }
+
+    /**
+     * Retrieves customer account details (including account number) by national ID,
+     * legal entity ID, or foreign identity number (Task section 2-3).
+     */
+    @Transactional(readOnly = true)
+    public AccountDetailsResponse getAccountByCustomerIdentity(
+            String identityNumber,
+            String identityType) {
+        if (identityNumber == null || identityNumber.isBlank()) {
+            throw new IllegalArgumentException("Identity number is required.");
+        }
+        if (customerRepository == null) {
+            throw new IllegalStateException("CustomerRepository is not configured.");
+        }
+
+        String normalizedIdNumber = identityNumber.trim();
+        Customer customer;
+        if (identityType != null && !identityType.isBlank()) {
+            String normalizedIdType = identityType.trim().toUpperCase(Locale.ROOT);
+            customer = customerRepository
+                    .findByIdentityTypeAndIdentityNumber(normalizedIdType, normalizedIdNumber)
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "Customer not found for the given identity."));
+        } else {
+            customer = customerRepository
+                    .findFirstByIdentityNumberOrderByIdAsc(normalizedIdNumber)
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "Customer not found for the given identity number."));
+        }
+
+        Account account = accountRepository
+                .findFirstByCustomerIdOrderByIdAsc(customer.getId())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Account not found for this customer."));
+
+        return AccountDetailsResponse.of(account, customer);
+    }
+
+    private AccountDetailsResponse toAccountDetailsResponse(Account account) {
+        if (account.getAccountRole() != AccountRole.CUSTOMER || account.getCustomerId() == null) {
+            throw new IllegalArgumentException(
+                    "Customer details are only available for customer accounts.");
+        }
+        if (customerRepository == null) {
+            throw new IllegalStateException("CustomerRepository is not configured.");
+        }
+        Customer customer = customerRepository.findById(account.getCustomerId())
+                .orElseThrow(() -> new ResourceNotFoundException("Customer not found."));
+        return AccountDetailsResponse.of(account, customer);
     }
 
     @Transactional(readOnly = true)
@@ -132,6 +237,17 @@ public class AccountManagementService {
                 newStatus.name()
         ));
 
-        return accountRepository.save(account);
+        Account saved = accountRepository.save(account);
+        if (balanceCache != null) {
+            // The cached balance view also carries the status; drop it once this change commits.
+            balanceCache.evictAfterCommit(java.util.List.of(account.getAccountNumber()));
+        }
+        log.info("Changed account status accountId={}, accountNumber={}, oldStatus={}, newStatus={}, changedBy={}",
+                account.getId(),
+                LogMasker.maskAccountNumber(account.getAccountNumber()),
+                oldStatus,
+                newStatus,
+                actor);
+        return saved;
     }
 }

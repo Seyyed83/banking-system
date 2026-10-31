@@ -2,13 +2,17 @@ package com.example.banking.transaction.service;
 
 import com.example.banking.account.entity.Account;
 import com.example.banking.account.entity.AccountRole;
+import com.example.banking.account.entity.AccountStatus;
 import com.example.banking.account.repository.AccountRepository;
 import com.example.banking.common.exception.ConflictException;
 import com.example.banking.common.exception.ResourceNotFoundException;
+import com.example.banking.common.logging.LogMasker;
 import com.example.banking.transaction.dto.CreateTransactionRequest;
 import com.example.banking.transaction.entity.TransactionRequest;
 import com.example.banking.transaction.entity.TransactionType;
 import com.example.banking.transaction.repository.TransactionRequestRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,6 +21,9 @@ import java.util.UUID;
 
 @Service
 public class TransactionSubmissionService {
+
+    private static final Logger log =
+            LoggerFactory.getLogger(TransactionSubmissionService.class);
 
     private final TransactionRequestRepository requestRepository;
     private final AccountRepository accountRepository;
@@ -57,22 +64,28 @@ public class TransactionSubmissionService {
                     throw new IllegalArgumentException(
                             "A deposit requires only destinationAccountNumber.");
                 }
-                destinationId = getCustomerAccount(destinationNumber).getId();
+                Account destination = getActiveCustomerAccount(
+                        destinationNumber, "Destination account");
+                destinationId = destination.getId();
             }
             case WITHDRAWAL -> {
                 if (sourceNumber == null || destinationNumber != null) {
                     throw new IllegalArgumentException(
                             "A withdrawal requires only sourceAccountNumber.");
                 }
-                sourceId = getCustomerAccount(sourceNumber).getId();
+                Account source = getActiveCustomerAccount(
+                        sourceNumber, "Source account");
+                sourceId = source.getId();
             }
             case TRANSFER -> {
                 if (sourceNumber == null || destinationNumber == null) {
                     throw new IllegalArgumentException(
                             "A transfer requires sourceAccountNumber and destinationAccountNumber.");
                 }
-                Account source = getCustomerAccount(sourceNumber);
-                Account destination = getCustomerAccount(destinationNumber);
+                Account source = getActiveCustomerAccount(
+                        sourceNumber, "Source account");
+                Account destination = getActiveCustomerAccount(
+                        destinationNumber, "Destination account");
                 if (source.getId().equals(destination.getId())) {
                     throw new IllegalArgumentException("Source and destination accounts must be different.");
                 }
@@ -89,23 +102,39 @@ public class TransactionSubmissionService {
                     && equal(prior.getDestinationAccountId(), destinationId)
                     && prior.getAmount().compareTo(amount) == 0;
             if (!samePayload) {
+                log.warn("Idempotency key conflict for clientId={}, idempotencyKey={}", clientId, key);
                 throw new ConflictException(
                         "Idempotency key was already used with a different transaction payload.");
             }
+            log.info("Returning existing transaction request requestCode={} for idempotent retry (clientId={})",
+                    prior.getRequestCode(), clientId);
             return new SubmissionResult(prior, false);
         }
 
         String requestCode = "REQ-" + UUID.randomUUID();
         TransactionRequest request = new TransactionRequest(
                 requestCode, clientId, key, type, sourceId, destinationId, amount);
-        return new SubmissionResult(requestRepository.saveAndFlush(request), true);
+        TransactionRequest saved = requestRepository.saveAndFlush(request);
+
+        log.info("Submitted transaction request requestCode={}, type={}, source={}, destination={}, amount={}",
+                saved.getRequestCode(),
+                type,
+                LogMasker.maskAccountNumber(sourceNumber),
+                LogMasker.maskAccountNumber(destinationNumber),
+                amount);
+
+        return new SubmissionResult(saved, true);
     }
 
-    private Account getCustomerAccount(String accountNumber) {
+    private Account getActiveCustomerAccount(String accountNumber, String label) {
         Account account = accountRepository.findByAccountNumber(accountNumber)
-                .orElseThrow(() -> new ResourceNotFoundException("Account not found."));
+                .orElseThrow(() -> new ResourceNotFoundException(label + " not found."));
         if (account.getAccountRole() != AccountRole.CUSTOMER) {
             throw new IllegalArgumentException("Financial requests can only use customer accounts.");
+        }
+        if (account.getStatus() != AccountStatus.ACTIVE) {
+            throw new IllegalArgumentException(
+                    label + " is " + account.getStatus().name() + " and cannot be used for transactions.");
         }
         return account;
     }

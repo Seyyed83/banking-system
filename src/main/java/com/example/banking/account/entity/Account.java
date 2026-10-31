@@ -130,6 +130,7 @@ public class Account {
         }
 
         this.status = newStatus;
+        this.updatedAt = OffsetDateTime.now(ZoneOffset.UTC);
     }
 
     public void credit(BigDecimal amount) {
@@ -185,10 +186,10 @@ public class Account {
         this.updatedAt = now;
     }
 
-    @PreUpdate
-    protected void beforeUpdate() {
-        this.updatedAt = OffsetDateTime.now(ZoneOffset.UTC);
-    }
+    // UPDATED_AT is the "last edit of the account" shown to users (task section 2-3). It is touched
+    // when the status changes (changeStatus) and when customer details are edited
+    // (AccountDetailsUpdateService), but NOT by deposits/withdrawals/transfers: balance movements
+    // are recorded in the ledger and are not edits of the account.
 
     public Long getId() {
         return id;

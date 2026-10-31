@@ -1,7 +1,9 @@
 package com.example.banking.customer.controller;
 
+import com.example.banking.account.dto.CreateCustomerAccountRequest;
 import com.example.banking.customer.entity.Customer;
 import com.example.banking.customer.service.CustomerService;
+import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,9 +23,9 @@ public class CustomerController {
 
     @PostMapping
     public ResponseEntity<Customer> registerCustomer(
-            @RequestBody Customer customer
+            @Valid @RequestBody CreateCustomerAccountRequest request
     ) {
-        Customer registeredCustomer = customerService.register(customer);
+        Customer registeredCustomer = customerService.register(request);
 
         return ResponseEntity
                 .status(HttpStatus.CREATED)

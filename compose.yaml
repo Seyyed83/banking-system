@@ -1,4 +1,3 @@
-
 services:
   oracle:
     image: gvenzl/oracle-free:23.9-slim-faststart
@@ -7,10 +6,90 @@ services:
       - "1521:1521"
     environment:
       ORACLE_PASSWORD: ${ORACLE_PASSWORD}
-      APP_USER: banking_app
+      APP_USER: ${DB_USERNAME:-banking_app}
       APP_USER_PASSWORD: ${DB_PASSWORD}
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
     volumes:
       - oracle_data:/opt/oracle/oradata
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: banking-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: banking-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:29092,CONTROLLER://:9093,EXTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 20s
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: banking-app
+    depends_on:
+      oracle:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      DB_URL: jdbc:oracle:thin:@//oracle:1521/FREEPDB1
+      DB_USERNAME: ${DB_USERNAME:-banking_app}
+      DB_PASSWORD: ${DB_PASSWORD}
+      BANKING_API_USERNAME: ${BANKING_API_USERNAME:-banking-admin}
+      BANKING_API_PASSWORD: ${BANKING_API_PASSWORD}
+      BANKING_SYSTEM_ACCOUNT_NUMBER: ${BANKING_SYSTEM_ACCOUNT_NUMBER:-99999999999999}
+      BANKING_TRANSFER_FEE_RATE: ${BANKING_TRANSFER_FEE_RATE:-0.001}
+      BANKING_TRANSFER_FEE_MINIMUM: ${BANKING_TRANSFER_FEE_MINIMUM:-500}
+      BANKING_TRANSFER_FEE_MAXIMUM: ${BANKING_TRANSFER_FEE_MAXIMUM:-10000}
+      BANKING_WORKER_POLL_INTERVAL_MS: ${BANKING_WORKER_POLL_INTERVAL_MS:-500}
+      BANKING_WORKER_MAX_BATCH_SIZE: ${BANKING_WORKER_MAX_BATCH_SIZE:-50}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      BANKING_KAFKA_ENABLED: ${BANKING_KAFKA_ENABLED:-true}
+      BANKING_KAFKA_CONSUMER_ENABLED: ${BANKING_KAFKA_CONSUMER_ENABLED:-true}
+      BANKING_CACHE_ENABLED: ${BANKING_CACHE_ENABLED:-true}
+      BANKING_CACHE_BALANCE_TTL_SECONDS: ${BANKING_CACHE_BALANCE_TTL_SECONDS:-30}
     restart: unless-stopped
 
 volumes:

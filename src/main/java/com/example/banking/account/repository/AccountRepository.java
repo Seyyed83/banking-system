@@ -18,7 +18,11 @@ public interface AccountRepository
 
     boolean existsByAccountNumber(String accountNumber);
 
+    boolean existsByCustomerId(Long customerId);
+
     Optional<Account> findByAccountNumber(String accountNumber);
+
+    Optional<Account> findFirstByCustomerIdOrderByIdAsc(Long customerId);
 
     /**
      * Scalar lookup: returns only the ID, so no Account entity is loaded into the

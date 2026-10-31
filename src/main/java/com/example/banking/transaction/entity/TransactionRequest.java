@@ -98,13 +98,8 @@ public class TransactionRequest {
         }
     }
 
-    public void markProcessing(String worker) {
-        status = TransactionRequestStatus.PROCESSING;
-        attemptCount++;
-        workerId = worker;
-        leaseUntil = OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(2);
-        failureCode = null;
-    }
+    // Claiming (PENDING/expired PROCESSING -> PROCESSING) is done exclusively by the atomic SQL
+    // updates in TransactionRequestRepository (claimById / claimNext), never by this entity.
 
     public void markCompleted() {
         status = TransactionRequestStatus.COMPLETED;

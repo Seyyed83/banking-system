@@ -31,22 +31,41 @@ public class Customer {
     @Column(name = "FULL_NAME", nullable = false, length = 200)
     private String fullName;
 
-    @Column(name = "BIRTH_OR_REG_DATE")
+    @Column(name = "BIRTH_OR_REG_DATE", nullable = false)
     private LocalDate birthOrRegDate;
 
-    @Column(name = "MOBILE", length = 20)
+    @Column(name = "MOBILE", nullable = false, length = 20)
     private String mobile;
 
-    @Column(name = "ADDRESS", length = 500)
+    @Column(name = "ADDRESS", nullable = false, length = 500)
     private String address;
 
-    @Column(name = "POSTAL_CODE", length = 20)
+    @Column(name = "POSTAL_CODE", nullable = false, length = 20)
     private String postalCode;
 
     @Column(name = "CREATED_AT", insertable = false, updatable = false)
     private OffsetDateTime createdAt;
 
-    protected Customer() {
+    public Customer() {
+    }
+
+    public Customer(
+            String customerType,
+            String identityType,
+            String identityNumber,
+            String fullName,
+            LocalDate birthOrRegDate,
+            String mobile,
+            String address,
+            String postalCode) {
+        this.customerType = customerType;
+        this.identityType = identityType;
+        this.identityNumber = identityNumber;
+        this.fullName = fullName;
+        this.birthOrRegDate = birthOrRegDate;
+        this.mobile = mobile;
+        this.address = address;
+        this.postalCode = postalCode;
     }
 
     public Long getId() {

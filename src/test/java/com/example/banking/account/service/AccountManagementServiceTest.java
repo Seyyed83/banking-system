@@ -1,19 +1,24 @@
 package com.example.banking.account.service;
 
+import com.example.banking.account.dto.AccountDetailsResponse;
 import com.example.banking.account.entity.Account;
 import com.example.banking.account.entity.AccountAudit;
 import com.example.banking.account.entity.AccountStatus;
 import com.example.banking.account.repository.AccountAuditRepository;
 import com.example.banking.account.repository.AccountRepository;
+import com.example.banking.common.exception.ResourceNotFoundException;
+import com.example.banking.customer.entity.Customer;
+import com.example.banking.customer.repository.CustomerRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
+
+import java.time.LocalDate;
 import java.util.Optional;
-import com.example.banking.common.exception.ResourceNotFoundException;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -28,8 +33,18 @@ class AccountManagementServiceTest {
     @Mock
     private AccountAuditRepository auditRepository;
 
-    @InjectMocks
+    @Mock
+    private CustomerRepository customerRepository;
+
     private AccountManagementService service;
+
+    @BeforeEach
+    void setUp() {
+        service = new AccountManagementService(
+                accountRepository,
+                auditRepository,
+                customerRepository);
+    }
 
     private Account createAccount() {
         Account account = Account.openCustomerAccount(
@@ -41,6 +56,21 @@ class AccountManagementServiceTest {
         return account;
     }
 
+    private Customer createCustomer() {
+        Customer customer = new Customer(
+                "INDIVIDUAL",
+                "NATIONAL_ID",
+                "0010350829",
+                "Sara Ahmadi",
+                LocalDate.of(1992, 3, 15),
+                "09121112233",
+                "Tehran, Vanak Sq.",
+                "1999999999"
+        );
+        ReflectionTestUtils.setField(customer, "id", 42L);
+        return customer;
+    }
+
     @Test
     void getsAccountById() {
         Account account = createAccount();
@@ -49,6 +79,43 @@ class AccountManagementServiceTest {
                 .thenReturn(Optional.of(account));
 
         assertSame(account, service.getById(1L));
+    }
+
+    @Test
+    void getsFullAccountDetailsByAccountNumber() {
+        Account account = createAccount();
+        Customer customer = createCustomer();
+
+        when(accountRepository.findByAccountNumber("12345678901234"))
+                .thenReturn(Optional.of(account));
+        when(customerRepository.findById(42L))
+                .thenReturn(Optional.of(customer));
+
+        AccountDetailsResponse details =
+                service.getDetailsByAccountNumber("12345678901234");
+
+        assertEquals("12345678901234", details.accountNumber());
+        assertEquals("Sara Ahmadi", details.fullName());
+        assertEquals("0010350829", details.identityNumber());
+        assertEquals(AccountStatus.ACTIVE, details.status());
+    }
+
+    @Test
+    void getsAccountByCustomerIdentityNumber() {
+        Account account = createAccount();
+        Customer customer = createCustomer();
+
+        when(customerRepository.findFirstByIdentityNumberOrderByIdAsc("0010350829"))
+                .thenReturn(Optional.of(customer));
+        when(accountRepository.findFirstByCustomerIdOrderByIdAsc(42L))
+                .thenReturn(Optional.of(account));
+
+        AccountDetailsResponse details =
+                service.getAccountByCustomerIdentity("0010350829", null);
+
+        assertEquals("12345678901234", details.accountNumber());
+        assertEquals(Long.valueOf(42L), details.customerId());
+        assertEquals("0010350829", details.identityNumber());
     }
 
     @Test

@@ -9,16 +9,19 @@ import com.example.banking.transaction.service.TransactionSubmissionService;
 import com.example.banking.transaction.service.TransactionWorker;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
-import java.time.OffsetDateTime;
+import java.sql.Date;
+import java.time.LocalDate;
 import java.util.Base64;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -32,6 +35,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "banking.worker.poll-interval-ms=3600000"
 })
 @AutoConfigureMockMvc
+@EnabledIfSystemProperty(named = "oracle.integration", matches = "true")
+@TestPropertySource(properties = {
+        "banking.security.username=test-admin",
+        "banking.security.password=test-password"
+})
 class TransactionHistoryApiIntegrationTest {
 
     @Autowired
@@ -209,13 +217,18 @@ class TransactionHistoryApiIntegrationTest {
         jdbcTemplate.update(
                 """
                 INSERT INTO CUSTOMERS
-                    (CUSTOMER_TYPE, IDENTITY_TYPE, IDENTITY_NUMBER, FULL_NAME)
-                VALUES (?, ?, ?, ?)
+                    (CUSTOMER_TYPE, IDENTITY_TYPE, IDENTITY_NUMBER, FULL_NAME,
+                     BIRTH_OR_REG_DATE, MOBILE, ADDRESS, POSTAL_CODE)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 "INDIVIDUAL",
                 "NATIONAL_ID",
                 identity,
-                "History API Integration Test");
+                "History API Integration Test",
+                Date.valueOf(LocalDate.of(1990, 1, 1)),
+                "09120000000",
+                "Tehran Integration Test Address",
+                "1234567890");
 
         Long customerId = jdbcTemplate.queryForObject(
                 """
@@ -247,14 +260,8 @@ class TransactionHistoryApiIntegrationTest {
     }
 
     private String authorizationHeader() {
-        String username = System.getenv("BANKING_API_USERNAME");
-        String password = System.getenv("BANKING_API_PASSWORD");
-
-        if (username == null || password == null) {
-            throw new IllegalStateException(
-                    "Set BANKING_API_USERNAME and BANKING_API_PASSWORD "
-                            + "before running this integration test.");
-        }
+        String username = System.getenv().getOrDefault("BANKING_API_USERNAME", "test-admin");
+        String password = System.getenv().getOrDefault("BANKING_API_PASSWORD", "test-password");
 
         String credentials = username + ":" + password;
 

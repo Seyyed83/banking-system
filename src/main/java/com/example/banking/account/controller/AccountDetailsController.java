@@ -3,7 +3,9 @@ package com.example.banking.account.controller;
 import com.example.banking.account.dto.AccountDetailsResponse;
 import com.example.banking.account.dto.UpdateAccountDetailsRequest;
 import com.example.banking.account.service.AccountDetailsUpdateService;
+import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -27,7 +29,9 @@ public class AccountDetailsController {
     @PutMapping("/{id}/details")
     public ResponseEntity<AccountDetailsResponse> updateCustomerDetails(
             @PathVariable Long id,
-            @RequestBody UpdateAccountDetailsRequest request) {
-        return ResponseEntity.ok(updateService.update(id, request));
+            @Valid @RequestBody UpdateAccountDetailsRequest request,
+            Authentication authentication) {
+        String changedBy = authentication != null ? authentication.getName() : null;
+        return ResponseEntity.ok(updateService.update(id, request, changedBy));
     }
 }

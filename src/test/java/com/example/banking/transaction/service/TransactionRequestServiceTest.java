@@ -1,6 +1,7 @@
 
 package com.example.banking.transaction.service;
 
+import com.example.banking.outbox.OutboxEventService;
 import com.example.banking.transaction.entity.TransactionRequest;
 import com.example.banking.transaction.entity.TransactionRequestStatus;
 import com.example.banking.transaction.repository.TransactionRequestRepository;
@@ -15,6 +16,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -26,6 +28,9 @@ class TransactionRequestServiceTest {
 
     @Mock
     private TransactionRequestRepository repository;
+
+    @Mock
+    private OutboxEventService outboxEventService;
 
     @InjectMocks
     private TransactionRequestService service;
@@ -115,6 +120,33 @@ class TransactionRequestServiceTest {
         assertNull(request.getWorkerId());
         assertNull(request.getLeaseUntil());
         assertNotNull(request.getProcessedAt());
+        verify(outboxEventService).recordFailed(request);
+    }
+
+    @Test
+    void markFailedRecordsFailureEventInSameTransaction() {
+        TransactionRequest request = request(42L, 1, "worker-1");
+
+        when(repository.findByIdForUpdate(42L))
+                .thenReturn(Optional.of(request));
+
+        service.markFailed(42L, "worker-1", "INSUFFICIENT_FUNDS");
+
+        assertEquals(TransactionRequestStatus.FAILED, request.getStatus());
+        verify(outboxEventService).recordFailed(request);
+    }
+
+    @Test
+    void markFailedByForeignWorkerRecordsNoEvent() {
+        TransactionRequest request = request(42L, 1, "worker-2");
+
+        when(repository.findByIdForUpdate(42L))
+                .thenReturn(Optional.of(request));
+
+        service.markFailed(42L, "worker-1", "INSUFFICIENT_FUNDS");
+
+        assertEquals(TransactionRequestStatus.PROCESSING, request.getStatus());
+        verifyNoInteractions(outboxEventService);
     }
 
     @Test
@@ -143,10 +175,30 @@ class TransactionRequestServiceTest {
     }
 
     @Test
-    void expiredExhaustedRequestsAreDelegatedToRepository() {
+    void expiredExhaustedRequestsAreFailedAndGetOutboxEvents() {
+        TransactionRequest expired = request(42L, 5, "dead-worker");
+
+        when(repository.findExpiredExhaustedForUpdate(
+                eq(TransactionRequestStatus.PROCESSING), eq(5), any(OffsetDateTime.class)))
+                .thenReturn(List.of(expired));
+
         service.failExpiredExhaustedRequests();
 
-        verify(repository).failExpiredExhaustedRequests(5);
+        assertEquals(TransactionRequestStatus.FAILED, expired.getStatus());
+        assertEquals("MAX_ATTEMPTS_EXCEEDED", expired.getFailureCode());
+        assertNull(expired.getWorkerId());
+        verify(outboxEventService).recordFailed(expired);
+    }
+
+    @Test
+    void noExpiredRequestsMeansNoEvents() {
+        when(repository.findExpiredExhaustedForUpdate(
+                eq(TransactionRequestStatus.PROCESSING), eq(5), any(OffsetDateTime.class)))
+                .thenReturn(List.of());
+
+        service.failExpiredExhaustedRequests();
+
+        verifyNoInteractions(outboxEventService);
     }
 
     private TransactionRequest request(

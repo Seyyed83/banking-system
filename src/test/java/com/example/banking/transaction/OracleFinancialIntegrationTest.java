@@ -1,7 +1,6 @@
 package com.example.banking.transaction;
 
 import com.example.banking.account.entity.Account;
-import com.example.banking.account.entity.AccountStatus;
 import com.example.banking.account.repository.AccountRepository;
 import com.example.banking.common.exception.ConflictException;
 import com.example.banking.transaction.dto.CreateTransactionRequest;
@@ -22,10 +21,12 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
 
 import java.math.BigDecimal;
+import java.sql.Date;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -36,7 +37,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** Real Oracle integration tests. Opt in with -Doracle.integration=true. */
-@SpringBootTest(properties = {"banking.worker.poll-interval-ms=3600000"})
+@SpringBootTest(properties = {"banking.worker.poll-interval-ms=3600000", "banking.kafka.enabled=false", "banking.kafka.consumer.enabled=false"})
 @EnabledIfSystemProperty(named = "oracle.integration", matches = "true")
 @TestPropertySource(properties = {"banking.security.username=test-admin", "banking.security.password=test-password"})
 class OracleFinancialIntegrationTest {
@@ -68,11 +69,43 @@ class OracleFinancialIntegrationTest {
 
         List<FinancialTransaction> transactions = financialTransactions(request);
         assertEquals(1, transactions.size());
-        assertEquals(FinancialTransactionType.DEPOSIT, transactions.getFirst().getTransactionType());
+        assertEquals(FinancialTransactionType.DEPOSIT, transactions.get(0).getTransactionType());
         List<LedgerEntry> entries = ledgerEntries(transactions);
         assertEquals(1, entries.size());
-        assertEquals(LedgerEntryType.CREDIT, entries.getFirst().getEntryType());
-        assertMoney("275.2500", entries.getFirst().getAmount());
+        assertEquals(LedgerEntryType.CREDIT, entries.get(0).getEntryType());
+        assertMoney("275.2500", entries.get(0).getAmount());
+    }
+
+    @Test
+    void completedRequestWritesExactlyOnePendingOutboxEvent() {
+        Account destination = newCustomerAccount(BigDecimal.ZERO);
+        TransactionRequest request = submit("OUTBOX_OK", TransactionType.DEPOSIT,
+                null, destination.getAccountNumber(), "10.0000");
+        processor.processRequest(request.getId());
+
+        assertEquals(TransactionRequestStatus.COMPLETED, getRequest(request.getId()).getStatus());
+        assertEquals(1, outboxCount(request, "TRANSACTION_COMPLETED", "PENDING"));
+        assertEquals(0, outboxCount(request, "TRANSACTION_FAILED", "PENDING"));
+    }
+
+    @Test
+    void failedRequestWritesFailureOutboxEventAndNoCompletedEvent() {
+        Account source = newCustomerAccount(new BigDecimal("5.0000"));
+        TransactionRequest request = submit("OUTBOX_FAIL", TransactionType.WITHDRAWAL,
+                source.getAccountNumber(), null, "50.0000");
+        processor.processRequest(request.getId());
+
+        assertEquals(TransactionRequestStatus.FAILED, getRequest(request.getId()).getStatus());
+        assertEquals(1, outboxCount(request, "TRANSACTION_FAILED", "PENDING"));
+        assertEquals(0, outboxCount(request, "TRANSACTION_COMPLETED", "PENDING"));
+    }
+
+    private int outboxCount(TransactionRequest request, String eventType, String status) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM OUTBOX_EVENTS WHERE AGGREGATE_TYPE = 'TRANSACTION_REQUEST' "
+                        + "AND AGGREGATE_ID = ? AND EVENT_TYPE = ? AND STATUS = ?",
+                Integer.class, request.getRequestCode(), eventType, status);
+        return count == null ? 0 : count;
     }
 
     @Test
@@ -87,11 +120,11 @@ class OracleFinancialIntegrationTest {
         assertMoney("500.0000", accountRepository.findById(source.getId()).orElseThrow().getBalance());
         List<FinancialTransaction> transactions = financialTransactions(request);
         assertEquals(1, transactions.size());
-        assertEquals(FinancialTransactionType.WITHDRAWAL, transactions.getFirst().getTransactionType());
+        assertEquals(FinancialTransactionType.WITHDRAWAL, transactions.get(0).getTransactionType());
         List<LedgerEntry> entries = ledgerEntries(transactions);
         assertEquals(1, entries.size());
-        assertEquals(LedgerEntryType.DEBIT, entries.getFirst().getEntryType());
-        assertMoney("300.0000", entries.getFirst().getAmount());
+        assertEquals(LedgerEntryType.DEBIT, entries.get(0).getEntryType());
+        assertMoney("300.0000", entries.get(0).getAmount());
     }
 
     @Test
@@ -292,8 +325,20 @@ class OracleFinancialIntegrationTest {
     private Account newCustomerAccount(BigDecimal initialBalance) {
         String identity = UUID.randomUUID().toString().replace("-", "").substring(0, 24);
         jdbcTemplate.update(
-                "INSERT INTO CUSTOMERS (CUSTOMER_TYPE, IDENTITY_TYPE, IDENTITY_NUMBER, FULL_NAME) VALUES (?, ?, ?, ?)",
-                "INDIVIDUAL", "NATIONAL_ID", identity, "Oracle Integration Test");
+                """
+                INSERT INTO CUSTOMERS
+                    (CUSTOMER_TYPE, IDENTITY_TYPE, IDENTITY_NUMBER, FULL_NAME,
+                     BIRTH_OR_REG_DATE, MOBILE, ADDRESS, POSTAL_CODE)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                "INDIVIDUAL",
+                "NATIONAL_ID",
+                identity,
+                "Oracle Integration Test",
+                Date.valueOf(LocalDate.of(1990, 1, 1)),
+                "09120000000",
+                "Tehran Integration Test Address",
+                "1234567890");
         Long customerId = jdbcTemplate.queryForObject(
                 "SELECT ID FROM CUSTOMERS WHERE IDENTITY_TYPE = ? AND IDENTITY_NUMBER = ?",
                 Long.class, "NATIONAL_ID", identity);

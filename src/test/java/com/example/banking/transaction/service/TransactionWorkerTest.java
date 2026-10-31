@@ -33,25 +33,54 @@ class TransactionWorkerTest {
     @Test
     void pollClaimsAndProcessesAvailableRequest() {
         when(requestService.claimNext(anyString()))
-                .thenReturn(Optional.of(42L));
+                .thenReturn(Optional.of(42L), Optional.empty());
 
         worker.poll();
 
-        ArgumentCaptor<String> workerIdCaptor =
+        ArgumentCaptor<String> claimCaptor =
                 ArgumentCaptor.forClass(String.class);
 
         InOrder order = inOrder(requestService, processor);
 
         order.verify(requestService).failExpiredExhaustedRequests();
         order.verify(requestService)
-                .claimNext(workerIdCaptor.capture());
+                .claimNext(claimCaptor.capture());
 
-        String workerId = workerIdCaptor.getValue();
+        String firstClaim = claimCaptor.getValue();
 
-        assertNotNull(workerId);
-        assertTrue(workerId.startsWith("worker-"));
+        assertNotNull(firstClaim);
+        assertTrue(firstClaim.startsWith("worker-"));
+        assertTrue(firstClaim.length() <= 100, "must fit WORKER_ID VARCHAR2(100)");
 
-        order.verify(processor).processRequest(42L, workerId);
+        order.verify(processor).processRequest(42L, firstClaim);
+
+        ArgumentCaptor<String> secondCaptor =
+                ArgumentCaptor.forClass(String.class);
+        order.verify(requestService).claimNext(secondCaptor.capture());
+        assertNotEquals(firstClaim, secondCaptor.getValue(),
+                "every claim must use its own unique token");
+    }
+
+    @Test
+    void pollDoesNothingWhenWorkerIsDisabled() {
+        org.springframework.test.util.ReflectionTestUtils.setField(worker, "enabled", false);
+
+        worker.poll();
+
+        verifyNoInteractions(requestService, processor);
+    }
+
+    @Test
+    void pollProcessesBatchOfRequestsUntilQueueIsEmpty() {
+        when(requestService.claimNext(anyString()))
+                .thenReturn(Optional.of(10L), Optional.of(20L), Optional.empty());
+
+        worker.poll();
+
+        verify(requestService).failExpiredExhaustedRequests();
+        verify(requestService, times(3)).claimNext(anyString());
+        verify(processor).processRequest(eq(10L), anyString());
+        verify(processor).processRequest(eq(20L), anyString());
     }
 
     @Test

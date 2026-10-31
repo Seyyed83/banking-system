@@ -8,6 +8,7 @@ import com.example.banking.transaction.service.SubmissionResult;
 import com.example.banking.transaction.service.TransactionHistoryService;
 import com.example.banking.transaction.service.TransactionQueryService;
 import com.example.banking.transaction.service.TransactionSubmissionService;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
@@ -15,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
+import java.net.URI;
 import java.time.OffsetDateTime;
 
 @RestController
@@ -37,11 +39,22 @@ public class TransactionController {
     @PostMapping
     public ResponseEntity<TransactionResponse> submit(
             @RequestBody CreateTransactionRequest request) {
-        SubmissionResult result = submissionService.submit(request);
-        TransactionResponse response =
-                queryService.getByRequestCode(result.request().getRequestCode());
+        SubmissionResult result;
+        try {
+            result = submissionService.submit(request);
+        } catch (DataIntegrityViolationException concurrentDuplicate) {
+            // Two identical requests (same clientId + idempotencyKey) raced and the second one hit
+            // the unique constraint. Its transaction is rolled back; submitting once more now finds
+            // the stored request and answers it as an idempotent replay instead of failing with 409.
+            result = submissionService.submit(request);
+        }
+        String requestCode = result.request().getRequestCode();
+        TransactionResponse response = queryService.getByRequestCode(requestCode);
+        // Processing is asynchronous (Worker): 202 Accepted for a newly queued request,
+        // 200 OK for an idempotent replay. Location points at the status resource.
         return ResponseEntity
-                .status(result.created() ? HttpStatus.CREATED : HttpStatus.OK)
+                .status(result.created() ? HttpStatus.ACCEPTED : HttpStatus.OK)
+                .location(URI.create("/api/v1/transactions/" + requestCode))
                 .body(response);
     }
 

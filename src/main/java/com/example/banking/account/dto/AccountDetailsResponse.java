@@ -2,6 +2,7 @@ package com.example.banking.account.dto;
 
 import com.example.banking.account.entity.Account;
 import com.example.banking.account.entity.AccountStatus;
+import com.example.banking.customer.entity.Customer;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -45,6 +46,28 @@ public record AccountDetailsResponse(
                 customer.mobile(),
                 customer.address(),
                 customer.postalCode()
+        );
+    }
+
+    public static AccountDetailsResponse of(
+            Account account,
+            Customer customer) {
+        return new AccountDetailsResponse(
+                account.getId(),
+                account.getAccountNumber(),
+                account.getStatus(),
+                account.getBalance(),
+                account.getCreatedAt(),
+                account.getUpdatedAt(),
+                customer.getId(),
+                customer.getCustomerType(),
+                customer.getIdentityType(),
+                customer.getIdentityNumber(),
+                customer.getFullName(),
+                customer.getBirthOrRegDate(),
+                customer.getMobile(),
+                customer.getAddress(),
+                customer.getPostalCode()
         );
     }
 
