@@ -34,6 +34,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(properties = {
         "banking.worker.poll-interval-ms=3600000"
 })
+@TestPropertySource(properties = {
+        "banking.security.username=banking-admin",
+        "banking.security.password=BankingDev2026"
+})
 @AutoConfigureMockMvc
 @EnabledIfSystemProperty(named = "oracle.integration", matches = "true")
 @TestPropertySource(properties = {
@@ -260,8 +264,8 @@ class TransactionHistoryApiIntegrationTest {
     }
 
     private String authorizationHeader() {
-        String username = System.getenv().getOrDefault("BANKING_API_USERNAME", "test-admin");
-        String password = System.getenv().getOrDefault("BANKING_API_PASSWORD", "test-password");
+        String username = System.getenv().getOrDefault("BANKING_API_USERNAME", "banking-admin");
+        String password = System.getenv().getOrDefault("BANKING_API_PASSWORD", "BankingDev2026");
 
         String credentials = username + ":" + password;
 
